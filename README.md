@@ -1,5 +1,7 @@
-1. Get a list of root sources
-2. Look them on scholarly
-3. Download the pdf
-   1. Parse the PDF and get their references
-   2.
+### To-do
+
+1. Build Tooling to extract data from OpenAlex
+2. Query for getting initial data + testing openalex tooling extraction
+3. Extract necessary information and build a publication graph
+4. Save publication graph to a json/csv
+5. Visualize the graph
