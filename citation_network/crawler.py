@@ -1,9 +1,12 @@
 import urllib.parse
 import requests
 import urllib
+import json
 import time
+import igraph as ig
 import math
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
+from tqdm.auto import tqdm
 import logging
 
 
@@ -32,7 +35,7 @@ def makeOAAPICall(
 ):
     paramsEncoded = urllib.parse.urlencode(parameters)
     requestURL = f"https://api.openalex.org/{entityType}?{paramsEncoded}"
-    logger.debug(f"Making API request: {requestURL}")
+    logger.info(f"Making API request: {requestURL}")
 
     if rateInterval > 0.0:
         logger.debug(f"Sleeping for {rateInterval} seconds before API call...")
@@ -57,6 +60,33 @@ def makeOAAPICall(
             )
         return response
     except requests.exceptions.RequestException as e:
+        logger.error(f"HTTP Request failed: {e}")
+        raise
+
+
+@timeit
+def makeOASingleWorksCall(workID, session: requests.Session = None):
+    requestURL = f"https://api.openalex.org/works/{workID}"
+    logger.debug(f"Making API request: {requestURL}")
+
+    if session is None:
+        session = requests.Session()
+
+    try:
+        response = session.get(requestURL).json()
+        if "error" in response:
+            if "error" in response and "message" in response:
+                errorMessage = f"{response["error"]} -- {response["message"]}"
+            else:
+                errorMessage = f"Unknown Error\n Response: {response}"
+
+            logger.error(f"OpenAlex API Error: {errorMessage}")
+            raise Exception(
+                f"Error in OpenAlex API call for a Single Work:\nWork ID: {workID}\n\tURL: {requestURL}\n\tResponse: {errorMessage}"
+            )
+        return response
+
+    except requests.exceptions.RequestsDependencyWarning as e:
         logger.error(f"HTTP Request failed: {e}")
         raise
 
@@ -220,3 +250,71 @@ class OAApi:
                 numberOfPages,
                 rateInterval,
             )
+
+
+def getIntegerIDFromOpenAlex(openAlexId: str):
+    return int(openAlexId.split("/")[-1][1:])
+
+
+# Attributes to keep
+#   id
+#   doi
+#   title
+#   publication_year
+#   publication_date
+#   language
+#   is_oa
+#   author(s)
+#   primary_topic
+#   abstract_inverted_index
+
+
+def processPublicationAttributes(attributes):
+    attributes_to_keep = set(["id", "doi", "title"])
+    attributes = {k: v for k, v in attributes.items() if k in attributes_to_keep}
+    for k, v in attributes.items():
+        if not isinstance(v, (int, float, str)):
+            attributes[k] = json.dumps(v)
+    return attributes
+
+
+# TODO: Finish building a citation network
+def createCitationGraph(entities: Union[_pageIterator, _cursorIterator]):
+    entities = tqdm(entities, desc="Creating the citation graph", leave=False)
+    visited = set()
+    nodeAttributes = {}
+    nodeReferences = []
+    oaIntID2Index = {}
+    index2oaIntID = []
+
+    for work in entities:
+        oaIntegerID = getIntegerIDFromOpenAlex(work["id"])
+        attributes = processPublicationAttributes(work)
+        visited.add(oaIntegerID)
+        oaIntID2Index[oaIntegerID] = len(index2oaIntID)
+        index2oaIntID.append(oaIntegerID)
+        nodeReferences.append(
+            [
+                getIntegerIDFromOpenAlex(referenced_work)
+                for referenced_work in work["referenced_works"]
+            ]
+        )
+
+        for k, v in attributes.items():
+            if k not in nodeAttributes:
+                nodeAttributes[k] = []
+            nodeAttributes[k].append(v)
+
+    citationEdges = []
+    for pub_idx, references in enumerate(nodeReferences):
+        for reference in references:
+            if reference in oaIntID2Index:
+                citationEdges.append((pub_idx, oaIntID2Index[reference]))
+    g = ig.Graph(
+        n=len(index2oaIntID),
+        edges=citationEdges,
+        directed=True,
+        vertex_attrs=nodeAttributes,
+    )
+
+    return g
