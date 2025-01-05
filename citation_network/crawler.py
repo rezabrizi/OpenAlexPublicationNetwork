@@ -1,12 +1,12 @@
-import urllib.parse
 import requests
-import urllib
+from collections import deque
 import json
-import time
 import igraph as ig
 import math
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Union, List, Iterator
 from tqdm.auto import tqdm
+
+from citation_network.utils import *
 import logging
 
 
@@ -16,171 +16,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def timeit(func):
-    """Decorator to log execution time of functions."""
-
-    def wrapper(*args, **kwargs):
-        start_time = time.time()
-        result = func(*args, **kwargs)
-        end_time = time.time()
-        logger.info(f"{func.__name__} executed in {end_time - start_time:.6f} seconds")
-        return result
-
-    return wrapper
+def getIntegerIDFromOpenAlex(openAlexId: str):
+    return int(openAlexId.split("/")[-1][1:])
 
 
-@timeit
-def makeOAAPICall(
-    entityType, parameters, session: requests.Session = None, rateInterval=0.0
-):
-    paramsEncoded = urllib.parse.urlencode(parameters)
-    requestURL = f"https://api.openalex.org/{entityType}?{paramsEncoded}"
-    logger.info(f"Making API request: {requestURL}")
-
-    if rateInterval > 0.0:
-        logger.debug(f"Sleeping for {rateInterval} seconds before API call...")
-        time.sleep(rateInterval)
-
-    if session is None:
-        session = requests.Session()
-
-    try:
-
-        response = session.get(requestURL).json()
-
-        if "meta" not in response or "error" in response:
-            if "error" in response and "message" in response:
-                errorMessage = f"{response["error"]} -- {response["message"]}"
-            else:
-                errorMessage = f"Unknown Error\n Response: {response}"
-
-            logger.error(f"OpenAlex API Error: {errorMessage}")
-            raise Exception(
-                f'Error in OpenAlex API call for "{entityType}":\nInput: {parameters}\n\tURL: {requestURL}\n\tResponse: {errorMessage}'
-            )
-        return response
-    except requests.exceptions.RequestException as e:
-        logger.error(f"HTTP Request failed: {e}")
-        raise
-
-
-@timeit
-def makeOASingleWorksCall(workID, session: requests.Session = None):
-    requestURL = f"https://api.openalex.org/works/{workID}"
-    logger.debug(f"Making API request: {requestURL}")
-
-    if session is None:
-        session = requests.Session()
-
-    try:
-        response = session.get(requestURL).json()
-        if "error" in response:
-            if "error" in response and "message" in response:
-                errorMessage = f"{response["error"]} -- {response["message"]}"
-            else:
-                errorMessage = f"Unknown Error\n Response: {response}"
-
-            logger.error(f"OpenAlex API Error: {errorMessage}")
-            raise Exception(
-                f"Error in OpenAlex API call for a Single Work:\nWork ID: {workID}\n\tURL: {requestURL}\n\tResponse: {errorMessage}"
-            )
-        return response
-
-    except requests.exceptions.RequestsDependencyWarning as e:
-        logger.error(f"HTTP Request failed: {e}")
-        raise
-
-
-class _pageIterator:
-    def __init__(
-        self,
-        entityType,
-        parameters,
-        totalEntries,
-        totalEntriesPerPage,
-        totalPages,
-        rateInterval,
-    ):
-        self._entityType = entityType
-        self._parameters = parameters.copy()
-        self._totalEntries = totalEntries
-        self._totalEntriesPerPage = totalEntriesPerPage
-        self._totalPages = totalPages
-        self._rateInterval = rateInterval
-
-    def __iter__(self):
-        self._processedEntries = 0
-        for page in range(1, self._totalPages + 1):
-            logger.info(f"Fetching page {page}/{self._totalPages}")
-
-            self._parameters["page"] = page
-            self._parameters["per_page"] = self._totalEntriesPerPage
-            responsePage = makeOAAPICall(
-                self._entityType, self._parameters, rateInterval=self._rateInterval
-            )
-            shouldBreak = False
-            for pageEntry in responsePage["results"]:
-                if self._processedEntries < self._totalEntries:
-                    self._processedEntries += 1
-                    yield pageEntry
-                else:
-                    shouldBreak = True
-                    break
-            if shouldBreak:
-                break
-
-    def __len__(self):
-        return self._totalEntries
-
-
-class _cursorIterator:
-    def __init__(
-        self,
-        entityType,
-        parameters,
-        totalEntries,
-        totalEntriesPerPage,
-        totalPages,
-        rateInterval,
-    ):
-        self._entityType = entityType
-        self._parameters = parameters
-        self._totalEntries = totalEntries
-        self._totalEntriesPerPage = totalEntriesPerPage
-        self._totalPages = totalPages
-        self._rateInterval = rateInterval
-        self._parameters["cursor"] = "*"
-        self._processedEntries = 0
-
-    def __iter__(self):
-        self._parameters["per_page"] = self._totalEntriesPerPage
-        while True:
-            response = makeOAAPICall(
-                self._entityType, self._parameters, rateInterval=self._rateInterval
-            )
-            shouldBreak = False
-            for pageEntry in response["results"]:
-                self._processedEntries += 1
-                if self._processedEntries > self._totalEntries:
-                    shouldBreak = True
-                    break
-                yield pageEntry
-            if (
-                shouldBreak
-                or "next_cursor" not in response["meta"]
-                or not response["meta"]["next_cursor"]
-            ):
-                break
-            self._parameters["cursor"] = response["meta"]["next_cursor"]
-
-    def __len__(self):
-        return self._totalEntries
-
-
-class OAApi:
+class EntitiesCrawler:
     def __init__(self, email=None):
         self.email = email
         self.session = requests.Session()
+        self._api = _OAAPI()
 
     @classmethod
     def getFilterString(cls, filters: Dict[str, str]):
@@ -197,6 +41,7 @@ class OAApi:
         maxEntities=10000,
         rateInterval=0.0,
     ):
+        self._api.profiler.reset()
         parameters = {}
         if filter:
             parameters["filter"] = self.__class__.getFilterString(filter)
@@ -211,9 +56,10 @@ class OAApi:
             parameters["mailto"] = self.email
 
         parametersFirstCall = {**parameters, "per_page": 200, "page": ""}
-        firstResponse = makeOAAPICall(
+        firstResponse = self._api.makeOAAPICall(
             entityType="works", parameters=parametersFirstCall, session=self.session
         )
+
         totalEntries = int(firstResponse["meta"]["count"])
 
         if totalEntries > maxEntities and maxEntities >= 0:
@@ -233,6 +79,7 @@ class OAApi:
         )
         if totalEntries <= 10000:
             return _pageIterator(
+                self._api,
                 "works",
                 parameters,
                 totalEntries,
@@ -243,6 +90,7 @@ class OAApi:
 
         else:
             return _cursorIterator(
+                self._api,
                 "works",
                 parameters,
                 totalEntries,
@@ -251,9 +99,36 @@ class OAApi:
                 rateInterval,
             )
 
+    def citationBFS(
+        self, root: List[str], maxLevels=100, maxNodes=None
+    ) -> Iterator[dict]:
+        """Performs BFS on OpenAlex citations, up to a certain depth and node limit."""
+        queue = deque([(r, 0) for r in root])  # (publication_id, level)
+        numNodesProcessed = 0  # Track number of processed nodes
 
-def getIntegerIDFromOpenAlex(openAlexId: str):
-    return int(openAlexId.split("/")[-1][1:])
+        while queue:
+            if maxNodes is not None and numNodesProcessed >= maxNodes:
+                break  # Stop if maxNodes limit is reached
+
+            current_publication_id, level = queue.popleft()
+            print(level)
+            if level >= maxLevels:
+                continue  # Stop expanding deeper
+
+            response = self._api.makeOASingleWorksCall(current_publication_id)
+
+            numNodesProcessed += 1
+
+            if not response or "referenced_works" not in response:
+                logger.error(current_publication_id, " didn't return anything")
+                continue
+            for referenced_work in response["referenced_works"]:
+                referenced_id = referenced_work.split("/")[-1]  # Extract ID
+                queue.append((referenced_id, level + 1))
+            yield response  # Return the current publication
+
+
+########## CREATE NETWORK
 
 
 # Attributes to keep
@@ -280,17 +155,24 @@ def processPublicationAttributes(attributes):
 
 # TODO: Finish building a citation network
 def createCitationGraph(entities: Union[_pageIterator, _cursorIterator]):
-    entities = tqdm(entities, desc="Creating the citation graph", leave=False)
-    visited = set()
+    progress = tqdm(
+        total=len(entities),
+        desc="Creating the citation graph",
+        leave=False,
+        dynamic_ncols=True,
+    )
+
     nodeAttributes = {}
     nodeReferences = []
     oaIntID2Index = {}
     index2oaIntID = []
 
     for work in entities:
+        progress.update(1)
+
         oaIntegerID = getIntegerIDFromOpenAlex(work["id"])
         attributes = processPublicationAttributes(work)
-        visited.add(oaIntegerID)
+
         oaIntID2Index[oaIntegerID] = len(index2oaIntID)
         index2oaIntID.append(oaIntegerID)
         nodeReferences.append(
@@ -304,6 +186,8 @@ def createCitationGraph(entities: Union[_pageIterator, _cursorIterator]):
             if k not in nodeAttributes:
                 nodeAttributes[k] = []
             nodeAttributes[k].append(v)
+
+    progress.close()
 
     citationEdges = []
     for pub_idx, references in enumerate(nodeReferences):
