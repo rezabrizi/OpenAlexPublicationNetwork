@@ -1,3 +1,5 @@
+"""Utilities for the OpenAlex Crawler"""
+
 import csv
 import igraph as ig
 import json
@@ -55,15 +57,15 @@ class _APIProfiler:
 
 class OAAPI:
     def __init__(self):
-        self._session = requests.Session()
-        self.profiler = _APIProfiler()
+        self._session: requests.Session = requests.Session()
+        self.profiler: _APIProfiler = _APIProfiler()
 
     def makeOAAPICall(
         self,
         entityType,
         parameters,
         rateInterval=0.0,
-    ):
+    ) -> Dict[str, Any]:
 
         paramsEncoded = urllib.parse.urlencode(parameters)
         requestURL = f"https://api.openalex.org/{entityType}?{paramsEncoded}"
@@ -158,7 +160,7 @@ class OAAPI:
         return None
 
 
-def save_citation_graph_to_csv(csv_handle: str, graph: ig.Graph):
+def save_citation_graph_to_csv(csv_handle: str, graph: ig.Graph) -> None:
     attributes_titles = graph.vs.attributes()
 
     with open(csv_handle, "w", newline="") as f:
@@ -179,7 +181,7 @@ def save_citation_graph_to_csv(csv_handle: str, graph: ig.Graph):
             writer.writerow([node_idx, children_str] + attributes)
 
 
-def create_citation_graph_from_csv(csv_handler):
+def create_citation_graph_from_csv(csv_handler) -> ig.Graph:
     if not osp.exists(csv_handler):
         raise FileNotFoundError(f"File {csv_handler} does not exists")
 

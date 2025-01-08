@@ -1,21 +1,11 @@
-########## CREATE NETWORK
-# Attributes to keep
-#   id
-#   doi
-#   title
-#   publication_year
-#   publication_date
-#   language
-#   is_oa
-#   author(s)
-#   primary_topic
-#   abstract_inverted_index
+"""Create a citation network based on an iterator on OpenAlex Work Objects"""
+
 import json
 import igraph as ig
-from typing import Union
+from typing import Dict, Iterator, Union, List
 from tqdm.auto import tqdm
 
-from citation_network.utils import *
+from citation_network.utils import _pageIterator, _cursorIterator
 
 
 def getIntegerIDFromOpenAlex(openAlexId: str):
@@ -34,8 +24,8 @@ def processPublicationAttributes(attributes, attributes_to_keep):
 
 # TODO: Finish building a citation network
 def createCitationGraph(
-    entities: Union[_pageIterator, _cursorIterator],
-    attributes_to_keep=[
+    entities: Union[_pageIterator, _cursorIterator, Iterator[Dict]],
+    attributes_to_keep: List[str] = [
         "id",
         "doi",
         "title",

@@ -1,9 +1,10 @@
+"""Crawling OpenAlex either via general search or citation BFS"""
+
 from collections import deque
 import math
-from typing import Dict, Optional, List, Iterator
-from tqdm.auto import tqdm
+from typing import Dict, Optional, List, Iterator, Union
 
-from citation_network.utils import *
+from citation_network.utils import OAAPI, _pageIterator, _cursorIterator
 from citation_network import log_context
 import logging
 
@@ -30,7 +31,7 @@ class EntitiesCrawler:
         sort=[],
         maxEntities=10000,
         rateInterval=0.0,
-    ):
+    ) -> Union[_pageIterator, _cursorIterator]:
         self._api.profiler.reset()
         parameters = {}
         if filter:
@@ -99,6 +100,7 @@ class EntitiesCrawler:
         self._api.profiler.reset()
         queue = deque([(r, 0) for r in root])  # (publication_id, level)
         numNodesProcessed = 0  # Track number of processed nodes
+        visited = set(root)
 
         while queue:
             if maxNodes is not None and numNodesProcessed >= maxNodes:
@@ -130,5 +132,7 @@ class EntitiesCrawler:
 
             for referenced_work in response["referenced_works"]:
                 referenced_id = referenced_work.split("/")[-1]  # Extract ID
-                queue.append((referenced_id, level + 1))
+                if referenced_id not in visited:
+                    visited.add(referenced_id)
+                    queue.append((referenced_id, level + 1))
             yield response
