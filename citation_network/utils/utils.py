@@ -15,14 +15,29 @@ class _APIProfiler:
     def __init__(self):
         self._total_api_time = 0.0
         self._api_call_count = 0.0
+        self._error_count = {}
 
     def reset(self):
         self._total_api_time = 0.0
         self._api_call_count = 0.0
+        self._error_count.clear()
 
     def track(self, start, end):
         self._total_api_time += end - start
         self._api_call_count += 1
+
+    def track(self, **kwargs):
+        if "start_time" and "end_time" in kwargs:
+            self._total_api_time += kwargs["end_time"] - kwargs["start_time"]
+            self._api_call_count += 1
+        elif "error" in kwargs:
+            if kwargs["error"] not in self._error_count:
+                self._error_count[kwargs["error"]] = 0
+            self._error_count[kwargs["error"]] += 1
+        else:
+            raise NotImplementedError(
+                "Only supporting time tracking and error tracking"
+            )
 
     def get_summary(self):
         avg_time = (
@@ -34,6 +49,7 @@ class _APIProfiler:
             "total_time": self._total_api_time,
             "api_calls": self._api_call_count,
             "average_time": avg_time,
+            "Errors": self._error_count,
         }
 
 
@@ -61,7 +77,10 @@ class OAAPI:
                 errorMessage = f'{response["error"]} -- {response["message"]}'
             else:
                 errorMessage = f"Unknown Error\n Response: {response}"
-
+            if "meta" not in response:
+                self.profiler.track(error="NA_Meta_in_response")
+            if "error" in response:
+                self.profiler.track(error=response["error"])
             logger.error(f"OpenAlex API Error: {errorMessage}")
             raise Exception(
                 f'Error in OpenAlex API call for "{entityType}":\nInput: {parameters}\n\tResponse: {errorMessage}'
@@ -99,11 +118,12 @@ class OAAPI:
                 # Check HTTP status before calling .json()
                 if response.status_code == 200:
                     end_time = time.time()
-                    self.profiler.track(start_time, end_time)
+                    self.profiler.track(start_time=start_time, end_time=end_time)
 
                     try:
                         return response.json()
                     except requests.exceptions.JSONDecodeError:
+                        self.profiler.track(error="JSONDecodeError")
                         logger.error(
                             f"Failed to decode JSON from OpenAlex API. Response: {response.text}"
                         )
@@ -113,21 +133,25 @@ class OAAPI:
                     logger.warning(
                         f"Rate limit hit (HTTPS 429). Retrying in {backoff} seconds..."
                     )
+                    self.profiler.track(error=response.status_code)
                     time.sleep(backoff)
                     backoff *= 2
 
                 elif response.status_code >= 500:  # Server Errors
                     logger.error(f"Server error ({response.status_code}). Retrying...")
+                    self.profiler.track(error=response.status_code)
                     time.sleep(backoff)
 
                 else:
                     logger.error(
                         f"API request failed with status {response.status_code}: {response.text}"
                     )
+                    self.profiler.track(error=response.status_code)
                     return None  # Return None to prevent further failures
 
             except requests.exceptions.RequestException as e:
                 logger.error(f"HTTP Request failed: {e}")
+                self.profiler.track(error=e)
                 time.sleep(backoff)
 
         logger.error(f"Max retries reached for {requestURL}. Skipping this work.")

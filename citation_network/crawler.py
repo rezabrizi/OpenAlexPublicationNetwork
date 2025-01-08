@@ -66,7 +66,7 @@ class EntitiesCrawler:
         totalEntriesPerPage = int(firstResponse["meta"]["per_page"])
         numberOfPages = math.ceil(totalEntries / totalEntriesPerPage)
 
-        logger.info("Finished first API call, returning iterator.")
+        logger.debug("Finished first API call, returning iterator.")
         logger.info(
             f"Total entities found: {totalEntries}, Pages to fetch: {numberOfPages}"
         )
@@ -96,6 +96,7 @@ class EntitiesCrawler:
         self, root: List[str], maxLevels=10, maxNodes=10000
     ) -> Iterator[dict]:
         """Performs BFS on OpenAlex citations, up to a certain depth and node limit."""
+        self._api.profiler.reset()
         queue = deque([(r, 0) for r in root])  # (publication_id, level)
         numNodesProcessed = 0  # Track number of processed nodes
 
