@@ -1,30 +1,20 @@
-import requests
 from collections import deque
-import json
-import igraph as ig
 import math
-from typing import Dict, Optional, Union, List, Iterator
+from typing import Dict, Optional, List, Iterator
 from tqdm.auto import tqdm
 
 from citation_network.utils import *
+from citation_network import log_context
 import logging
 
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
-
-
-def getIntegerIDFromOpenAlex(openAlexId: str):
-    return int(openAlexId.split("/")[-1][1:])
 
 
 class EntitiesCrawler:
     def __init__(self, email=None):
         self.email = email
-        self.session = requests.Session()
-        self._api = _OAAPI()
+        self._api = OAAPI()
 
     @classmethod
     def getFilterString(cls, filters: Dict[str, str]):
@@ -57,8 +47,11 @@ class EntitiesCrawler:
 
         parametersFirstCall = {**parameters, "per_page": 200, "page": ""}
         firstResponse = self._api.makeOAAPICall(
-            entityType="works", parameters=parametersFirstCall, session=self.session
+            entityType="works", parameters=parametersFirstCall
         )
+
+        if not firstResponse:
+            raise Exception("Error in getting a response from OpenAlex API")
 
         totalEntries = int(firstResponse["meta"]["count"])
 
@@ -100,7 +93,7 @@ class EntitiesCrawler:
             )
 
     def citationBFS(
-        self, root: List[str], maxLevels=100, maxNodes=None
+        self, root: List[str], maxLevels=10, maxNodes=10000
     ) -> Iterator[dict]:
         """Performs BFS on OpenAlex citations, up to a certain depth and node limit."""
         queue = deque([(r, 0) for r in root])  # (publication_id, level)
@@ -111,94 +104,30 @@ class EntitiesCrawler:
                 break  # Stop if maxNodes limit is reached
 
             current_publication_id, level = queue.popleft()
-            print(level)
             if level >= maxLevels:
                 continue  # Stop expanding deeper
+            with log_context({"WID": current_publication_id}):
+                response = self._api.makeOASingleWorksCall(
+                    current_publication_id, mailto=self.email
+                )
 
-            response = self._api.makeOASingleWorksCall(current_publication_id)
+            # TODO (reza): Add functionality to provide a report on the dataset such as
+            #   WIDs that didn't return a response
+            if not response:
+                logger.error(
+                    f"Error while getting works object for {current_publication_id}."
+                )
+                continue
+
+            if "referenced_works" not in response:
+                logger.error(
+                    f"This work has no referenced works {current_publication_id}"
+                )
+                continue
 
             numNodesProcessed += 1
 
-            if not response or "referenced_works" not in response:
-                logger.error(current_publication_id, " didn't return anything")
-                continue
             for referenced_work in response["referenced_works"]:
                 referenced_id = referenced_work.split("/")[-1]  # Extract ID
                 queue.append((referenced_id, level + 1))
-            yield response  # Return the current publication
-
-
-########## CREATE NETWORK
-
-
-# Attributes to keep
-#   id
-#   doi
-#   title
-#   publication_year
-#   publication_date
-#   language
-#   is_oa
-#   author(s)
-#   primary_topic
-#   abstract_inverted_index
-
-
-def processPublicationAttributes(attributes):
-    attributes_to_keep = set(["id", "doi", "title"])
-    attributes = {k: v for k, v in attributes.items() if k in attributes_to_keep}
-    for k, v in attributes.items():
-        if not isinstance(v, (int, float, str)):
-            attributes[k] = json.dumps(v)
-    return attributes
-
-
-# TODO: Finish building a citation network
-def createCitationGraph(entities: Union[_pageIterator, _cursorIterator]):
-    progress = tqdm(
-        total=len(entities),
-        desc="Creating the citation graph",
-        leave=False,
-        dynamic_ncols=True,
-    )
-
-    nodeAttributes = {}
-    nodeReferences = []
-    oaIntID2Index = {}
-    index2oaIntID = []
-
-    for work in entities:
-        progress.update(1)
-
-        oaIntegerID = getIntegerIDFromOpenAlex(work["id"])
-        attributes = processPublicationAttributes(work)
-
-        oaIntID2Index[oaIntegerID] = len(index2oaIntID)
-        index2oaIntID.append(oaIntegerID)
-        nodeReferences.append(
-            [
-                getIntegerIDFromOpenAlex(referenced_work)
-                for referenced_work in work["referenced_works"]
-            ]
-        )
-
-        for k, v in attributes.items():
-            if k not in nodeAttributes:
-                nodeAttributes[k] = []
-            nodeAttributes[k].append(v)
-
-    progress.close()
-
-    citationEdges = []
-    for pub_idx, references in enumerate(nodeReferences):
-        for reference in references:
-            if reference in oaIntID2Index:
-                citationEdges.append((pub_idx, oaIntID2Index[reference]))
-    g = ig.Graph(
-        n=len(index2oaIntID),
-        edges=citationEdges,
-        directed=True,
-        vertex_attrs=nodeAttributes,
-    )
-
-    return g
+            yield response

@@ -1,5 +1,5 @@
 import logging
-from citation_network.utils.utils import _OAAPI
+from citation_network.utils.utils import OAAPI
 
 
 logger = logging.getLogger()
@@ -8,7 +8,7 @@ logger = logging.getLogger()
 class _pageIterator:
     def __init__(
         self,
-        api: _OAAPI,
+        api: OAAPI,
         entityType,
         parameters,
         totalEntries,
@@ -52,7 +52,7 @@ class _pageIterator:
 class _cursorIterator:
     def __init__(
         self,
-        api: _OAAPI,
+        api: OAAPI,
         entityType,
         parameters,
         totalEntries,
