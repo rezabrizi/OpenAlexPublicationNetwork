@@ -1,7 +1,7 @@
 [tool.poetry]
-name = "citation-network"
-version = "0.1.0"
-description = ""
+name = "openalexnetwork"
+version = "0.1.6"
+description = "Module to build citation networks with OpenAlex"
 authors = ["Reza Tabrizi <rtabrizi03@gmail.com>"]
 readme = "README.md"
 

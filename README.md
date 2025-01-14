@@ -93,8 +93,8 @@ This ensures detailed insights into extraction processes and debugging capabilit
 
 This library provides an efficient way to extract and analyze publication networks, making it valuable for researchers in **citation analysis, network science, and information diffusion modeling**.
 
-## Citation
+## References
 
-If you use this library, please cite:
+Special thanks to the team @OpenAlex for their great open-source repository and providing us with a freemium subscription. Note, OpenAlex is completly free and for 99% of use cases of this library you will be good without any subscription.
 
 Priem, J., Piwowar, H., & Orr, R. (2022). OpenAlex: A fully-open index of scholarly works, authors, venues, institutions, and concepts. ArXiv. [https://arxiv.org/abs/2205.01833](https://arxiv.org/abs/2205.01833)
